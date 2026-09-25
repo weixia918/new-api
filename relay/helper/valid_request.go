@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"regexp"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -312,6 +313,14 @@ func GetAndValidateTextRequest(c *gin.Context, relayMode int) (*dto.GeneralOpenA
 			return nil, errors.New("field instruction is required")
 		}
 	}
+
+	// ── Dynamic Tools: 校验 + 提升到根层级 ──────────────────────────────
+	if relayMode == relayconstant.RelayModeChatCompletions {
+		if err := validateAndLiftDynamicTools(textRequest); err != nil {
+			return nil, err
+		}
+	}
+	// ────────────────────────────────────────────────────────────────────
 	return textRequest, nil
 }
 
@@ -348,4 +357,90 @@ func GetAndValidateGeminiBatchEmbeddingRequest(c *gin.Context) (*dto.GeminiBatch
 		return nil, err
 	}
 	return request, nil
+}
+
+// validateAndLiftDynamicTools 校验 messages 内嵌的动态 tools，并将其提升到根层级 tools。
+var validToolNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+func validateAndLiftDynamicTools(request *dto.GeneralOpenAIRequest) error {
+	globalNames := make(map[string]bool)
+	for _, t := range request.Tools {
+		if t.Function.Name != "" {
+			globalNames[t.Function.Name] = true
+		}
+	}
+
+	allDynamicNames := make(map[string]bool)
+	var dynamicTools []dto.ToolCallRequest
+
+	for i, msg := range request.Messages {
+		if len(msg.Tools) == 0 {
+			continue
+		}
+
+		if msg.Role != "system" {
+			return types.NewError(
+				fmt.Errorf("tools only allowed in system messages, got role=%q at message index %d", msg.Role, i),
+				types.ErrorCodeInvalidRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+
+		if msg.StringContent() != "" {
+			return types.NewError(
+				fmt.Errorf("system message with tools must have empty content"),
+				types.ErrorCodeInvalidRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+
+		for _, tool := range msg.Tools {
+			if tool.Type != "function" {
+				return types.NewError(
+					fmt.Errorf("unsupported tool type %q, only function is supported", tool.Type),
+					types.ErrorCodeInvalidRequest,
+					types.ErrOptionWithSkipRetry(),
+				)
+			}
+			name := tool.Function.Name
+			if name == "" {
+				return types.NewError(
+					fmt.Errorf("tool missing required field name"),
+					types.ErrorCodeInvalidRequest,
+					types.ErrOptionWithSkipRetry(),
+				)
+			}
+			if len(name) > 256 {
+				return types.NewError(
+					fmt.Errorf("tool name too long (%d chars, max 256)", len(name)),
+					types.ErrorCodeInvalidRequest,
+					types.ErrOptionWithSkipRetry(),
+				)
+			}
+			if !validToolNameRe.MatchString(name) {
+				return types.NewError(
+					fmt.Errorf("invalid tool name %q", name),
+					types.ErrorCodeInvalidRequest,
+					types.ErrOptionWithSkipRetry(),
+				)
+			}
+			if globalNames[name] || allDynamicNames[name] {
+				return types.NewError(
+					fmt.Errorf("duplicate tool name %q", name),
+					types.ErrorCodeInvalidRequest,
+					types.ErrOptionWithSkipRetry(),
+				)
+			}
+			allDynamicNames[name] = true
+			dynamicTools = append(dynamicTools, tool)
+		}
+
+		request.Messages[i].Tools = nil
+	}
+
+	if len(dynamicTools) > 0 {
+		request.Tools = append(dynamicTools, request.Tools...)
+	}
+
+	return nil
 }

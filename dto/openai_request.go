@@ -293,6 +293,7 @@ type Message struct {
 	Reasoning        *string         `json:"reasoning,omitempty"`
 	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallId       string          `json:"tool_call_id,omitempty"`
+	Tools           []ToolCallRequest `json:"tools,omitempty"`
 	parsedContent    []MediaContent
 	//parsedStringContent *string
 }
