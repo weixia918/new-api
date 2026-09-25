@@ -11,12 +11,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build frontend default
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          cd default && DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat ../../VERSION) bun run build
+
+      - name: Build frontend classic
+        working-directory: web
+        run: |
+          cd classic && VITE_REACT_APP_VERSION=$(cat ../../VERSION) bun run build
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
 
-      - name: Build
+      - name: Build binary
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
             -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" \
